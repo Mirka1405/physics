@@ -58,8 +58,15 @@ static void DrawValueRowF(const char* name, float& val, float step, float x, flo
     DrawText(oss.str().c_str(), (int)(x+160), (int)y, 18, (Color){180,220,255,255});
     Rectangle minusR = {x+260, y, 24, 24};
     Rectangle plusR  = {x+290, y, 24, 24};
-    if (DrawBtn(minusR, "-")) val -= step;
-    if (DrawBtn(plusR,  "+")) val += step;
+    double keyscale = 1;
+    if(IsKeyDown(KEY_LEFT_ALT))keyscale*=10000;
+    if(IsKeyDown(KEY_LEFT_SHIFT))keyscale*=10;
+    if(IsKeyDown(KEY_LEFT_CONTROL))keyscale*=100;
+    if(IsKeyDown(KEY_RIGHT_CONTROL))keyscale*=0.01;
+    if(IsKeyDown(KEY_LEFT_SHIFT))keyscale*=0.1;
+    if(IsKeyDown(KEY_LEFT_ALT))keyscale*=0.0001;
+    if (DrawBtn(minusR, "-")) val -= step*keyscale;
+    if (DrawBtn(plusR,  "+")) val += step*keyscale;
     y += 28;
 }
 
@@ -227,7 +234,6 @@ inline void Draw(){
         // Small preview dot using current color
         DrawCircle(st.panel.x + st.panel.width - 40, st.panel.y + 40, 10, o->color);
 
-        // Optional: quick actions
         Rectangle delR = { x, st.panel.y + st.panel.height - 36, 70, 26 };
         if (DrawBtn(delR, "Delete")) { o->shouldRemove = true; st.visible = false; st.selected = nullptr; }
     }
