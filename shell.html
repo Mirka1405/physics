@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>raylib wasm</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+      touch-action: none; /* prevent scroll on touch */
+    }
+    /* Let the canvas *visually* fill the window. Actual pixel size set via JS for DPR. */
+    #canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      outline: none;
+      /* If you want chunky pixel look (retro), uncomment the next line: */
+      /* image-rendering: pixelated; */
+    }
+    /* Optional tiny status overlay (toggle if you like) */
+    #status {
+      position: fixed;
+      left: 8px; bottom: 8px;
+      font: 12px/1.4 monospace;
+      color: #9aa0a6; opacity: 0.8;
+      background: rgba(0,0,0,0.35);
+      padding: 4px 6px; border-radius: 4px;
+      user-select: none; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
+  <div id="status">loading…</div>
+
+  <script>
+    // Emscripten module stub. The linker will inject more stuff here.
+    var Module = {
+      preRun: [],
+      postRun: [],
+      print: (function() {
+        const elem = document.getElementById('status');
+        return function(text) { if (elem) elem.textContent = text; };
+      })(),
+      printErr: function(text) { console.error(text); },
+      setStatus: function(text) {
+        const elem = document.getElementById('status');
+        if (elem) elem.textContent = text || '';
+      },
+      canvas: (function() {
+        const c = document.getElementById('canvas');
+        // Prevent tab from scrolling page with arrow keys while playing
+        c.addEventListener('keydown', (e) => {
+          // Let F5/F12 etc. pass
+          if (['F5','F12'].includes(e.key)) return;
+          // Prevent default for most keys so the page doesn't scroll
+          e.preventDefault();
+        });
+        return c;
+      })(),
+      onRuntimeInitialized: function() {
+        fitCanvas(); // ensure correct size right away
+      }
+    };
+
+    function fitCanvas() {
+      const canvas = Module.canvas || document.getElementById('canvas');
+      if (!canvas) return;
+
+      // CSS sets the *display* size. Here we set the *backing store* size for crisp pixels.
+      const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 3)); // clamp a bit for perf
+      const cssW = Math.max(1, Math.floor(window.innerWidth));
+      const cssH = Math.max(1, Math.floor(window.innerHeight));
+      const pixelW = Math.floor(cssW * dpr);
+      const pixelH = Math.floor(cssH * dpr);
+
+      // Prefer Emscripten helper if available (keeps GL context happy).
+      if (typeof Module.setCanvasSize === 'function') {
+        Module.setCanvasSize(pixelW, pixelH, false /*doNotChangeCss*/);
+      } else {
+        canvas.width  = pixelW;
+        canvas.height = pixelH;
+      }
+
+      // Keep CSS at 100% so it visually fills the window.
+      canvas.style.width  = cssW + 'px';
+      canvas.style.height = cssH + 'px';
+      Module.setStatus('');
+    }
+
+    // Resize on window/orientation changes
+    window.addEventListener('resize', fitCanvas);
+    window.addEventListener('orientationchange', fitCanvas);
+    // Some mobile browsers update DPR after zoom; poll once after a tick
+    window.addEventListener('load', () => setTimeout(fitCanvas, 0));
+  </script>
+  {{{ SCRIPT }}}
+  <!-- The script below will be injected by emscripten linker:
+       <script async src="game.js"></script>
+       It expects a global `Module` as defined above. -->
+</body>
+</html>
