@@ -10,6 +10,17 @@ extern Vector2 windowPos;
 extern Vector2 vector(double x, double y);
 extern double distance(const Vector2& a, const Vector2& b);
 
+double getKeyScale(){
+  double keyscale = 1;
+  if(IsKeyDown(KEY_LEFT_ALT))keyscale*=10000;
+  if(IsKeyDown(KEY_LEFT_SHIFT))keyscale*=10;
+  if(IsKeyDown(KEY_LEFT_CONTROL))keyscale*=100;
+  if(IsKeyDown(KEY_RIGHT_CONTROL))keyscale*=0.01;
+  if(IsKeyDown(KEY_RIGHT_SHIFT))keyscale*=0.1;
+  if(IsKeyDown(KEY_RIGHT_ALT))keyscale*=0.0001;
+  if(IsKeyDown(KEY_Z))keyscale=1/keyscale;
+  return keyscale;
+}
 namespace PhysEditor {
 
 // Right-click opens editor. If right-clicked empty space, edit template for new objects.
@@ -58,13 +69,7 @@ static void DrawValueRowF(const char* name, float& val, float step, float x, flo
     DrawText(oss.str().c_str(), (int)(x+160), (int)y, 18, (Color){180,220,255,255});
     Rectangle minusR = {x+260, y, 24, 24};
     Rectangle plusR  = {x+290, y, 24, 24};
-    double keyscale = 1;
-    if(IsKeyDown(KEY_LEFT_ALT))keyscale*=10000;
-    if(IsKeyDown(KEY_LEFT_SHIFT))keyscale*=10;
-    if(IsKeyDown(KEY_LEFT_CONTROL))keyscale*=100;
-    if(IsKeyDown(KEY_RIGHT_CONTROL))keyscale*=0.01;
-    if(IsKeyDown(KEY_LEFT_SHIFT))keyscale*=0.1;
-    if(IsKeyDown(KEY_LEFT_ALT))keyscale*=0.0001;
+    double keyscale = getKeyScale();
     if (DrawBtn(minusR, "-")) val -= step*keyscale;
     if (DrawBtn(plusR,  "+")) val += step*keyscale;
     y += 28;
@@ -76,8 +81,9 @@ static void DrawValueRowD(const char* name, double& val, double step, float x, f
     DrawText(oss.str().c_str(), (int)(x+160), (int)y, 18, (Color){180,220,255,255});
     Rectangle minusR = {x+260, y, 24, 24};
     Rectangle plusR  = {x+290, y, 24, 24};
-    if (DrawBtn(minusR, "-")) val -= step;
-    if (DrawBtn(plusR,  "+")) val += step;
+    double keyscale = getKeyScale();
+    if (DrawBtn(minusR, "-")) val -= step*keyscale;
+    if (DrawBtn(plusR,  "+")) val += step*keyscale;
     y += 28;
 }
 

@@ -107,7 +107,7 @@ void explosion(Vector2 pos,Color color,double maxSize,Vector2 speed,int maxParti
     objectList.push_back(new Particle(pos,vector(randNegFloat(),randNegFloat())*speed,color,maxSize*randFloat()));
   }
 }
-
+/*
 void Object::tickWithAttractionForce(){ // if called, you don't need to call Object::tick().
   if(lastCollision&&!checkCollision(lastCollision)){lastCollision=nullptr;}
   // F = mg
@@ -125,7 +125,29 @@ void Object::tickWithAttractionForce(){ // if called, you don't need to call Obj
         auto avgElasticity = (elasticity+(*i)->elasticity)/2;
         Vector2 collision_dir = (*i)->pos-pos;
         Vector2 collision_normal = Vector2Normalize(collision_dir);
-        
+        if (auto selfC = dynamic_cast<CircularObject*>(this)) {
+            if (auto otherC = dynamic_cast<CircularObject*>(*i)) {
+                double dx = otherC->pos.x - selfC->pos.x;
+                double dy = otherC->pos.y - selfC->pos.y;
+                double d  = std::sqrt(dx*dx + dy*dy);
+                double target = selfC->radius + otherC->radius;
+                double pen = target - d;
+                if (pen > 0.0 && d > 0.0) {
+                    // Baumgarte-style positional correction with slop to reduce jitter
+                    const double slop = 0.1;     // allowed tiny penetration (engine units)
+                    const double percent = 0.8;  // resolve 80% per frame
+                    double corr = std::max(0.0, pen - slop) * percent;
+
+                    Vector2 n = { (float)(dx / d), (float)(dy / d) };
+                    double im1 = (mass > 0.0)      ? 1.0 / mass        : 0.0;
+                    double im2 = ((*i)->mass > 0.) ? 1.0 / (*i)->mass  : 0.0;
+                    double sum = im1 + im2; if (sum == 0.0) sum = 1.0;
+
+                    selfC->pos  -= n * (float)(corr * (im1 / sum));
+                    otherC->pos += n * (float)(corr * (im2 / sum));
+                }
+            }
+        }
         float v1 = Vector2DotProduct(speed, collision_normal);
         float v2 = Vector2DotProduct((*i)->speed, collision_normal);
         
@@ -177,6 +199,147 @@ void Object::tickWithAttractionForce(){ // if called, you don't need to call Obj
   }
   Object::tick();
   this->speed+=F/this->mass*GetFrameTime()*timeScale;
+}
+*/
+void Object::tickWithAttractionForce() { // replaces your current implementation
+  if (lastCollision && !checkCollision(lastCollision)) lastCollision = nullptr;
+
+  // time stepping (substep to avoid tunneling/creep)
+  const double ft = GetFrameTime() * timeScale;
+  const double maxDt = 1.0 / 240.0;                 // ~4.17 ms substeps
+  int steps = (int)ceil(ft / maxDt);
+  if (steps < 1) steps = 1;
+  const double dt = ft / steps;
+
+  for (int s = 0; s < steps; ++s) {
+    Vector2 F = vector(0, 0);
+
+    for (auto i = objectList.begin(); i != objectList.end(); ) {
+      if ((*i)->mass == 0 || uuid == (*i)->uuid) { ++i; continue; }
+
+      // --- Collision handling (circles) ---
+      if (checkCollision(*i)) {
+        auto selfC  = dynamic_cast<CircularObject*>(this);
+        auto otherC = dynamic_cast<CircularObject*>(*i);
+
+        // Always do positional correction if overlapping (prevents slow sinking)
+        if (selfC && otherC) {
+          double dx = otherC->pos.x - selfC->pos.x;
+          double dy = otherC->pos.y - selfC->pos.y;
+          double d  = std::sqrt(dx*dx + dy*dy);
+          double target = selfC->radius + otherC->radius;
+          double pen = target - d;
+          if (pen > 0.0 && d > 0.0) {
+            const double slop = 0.1;      // allow tiny overlap
+            const double percent = 0.8;   // resolve 80% each frame
+            double corr = std::max(0.0, pen - slop) * percent;
+
+            Vector2 n = { (float)(dx / d), (float)(dy / d) };
+            double im1 = (mass > 0.0)       ? 1.0 / mass       : 0.0;
+            double im2 = ((*i)->mass > 0.0) ? 1.0 / (*i)->mass : 0.0;
+            double sum = im1 + im2; if (sum == 0.0) sum = 1.0;
+
+            selfC->pos  -= n * (float)(corr * (im1 / sum));
+            otherC->pos += n * (float)(corr * (im2 / sum));
+          }
+
+          // Elastic vs merge
+          if (elasticity != 0 && (*i)->elasticity != 0) {
+            Vector2 n = Vector2Normalize(otherC->pos - selfC->pos);
+            float v1 = Vector2DotProduct(speed, n);
+            float v2 = Vector2DotProduct((*i)->speed, n);
+            bool approaching = (v1 - v2) > 0.0f;
+
+            if (approaching) {
+              float avgE = std::clamp((elasticity + (*i)->elasticity) * 0.5f, 0.0f, 1.0f);
+              float new_v1 = ((float)(mass - (*i)->mass) * v1 + 2.0f * (float)(*i)->mass * v2) / (float)(mass + (*i)->mass);
+              float new_v2 = (2.0f * (float)mass * v1 + (float)((*i)->mass - mass) * v2) / (float)(mass + (*i)->mass);
+              new_v1 *= avgE; new_v2 *= avgE;
+
+              speed       = speed        - n * v1 + n * new_v1;
+              (*i)->speed = (*i)->speed  - n * v2 + n * new_v2;
+
+              // optional fx
+              if (distance(speed) + distance((*i)->speed) > 20) {
+                auto otherArea = otherC->area();
+                explosion((*i)->pos, color, std::sqrt(otherArea) * 0.2, distance((*i)->speed) * 1.5,
+                          (int)std::sqrt(distance(speed) + distance((*i)->speed)));
+              }
+            }
+
+            (*i)->lastCollision = this;
+            lastCollision = *i;
+            ++i;
+            continue;
+          } else {
+            // Merge branch (any elasticity == 0)
+            auto ownArea   = selfC->area();
+            auto otherArea = otherC->area();
+
+            if (otherArea > ownArea) {
+              auto oldPos = pos;
+              pos = (*i)->pos;
+              (*i)->pos = oldPos; // for correct particle spawning
+            }
+
+            explosion((*i)->pos, (*i)->color, std::sqrt(otherArea) * 0.5, distance((*i)->speed) * 0.5);
+            selfC->setArea(ownArea + otherArea);
+
+            double areaSum = ownArea + otherArea;
+            ownArea   /= areaSum;
+            otherArea /= areaSum;
+
+            double sumMass = mass + (*i)->mass;
+            speed = (speed * mass + (*i)->speed * (*i)->mass) / sumMass;
+            mass  = sumMass;
+
+            color.r = (unsigned char)std::clamp(color.r * ownArea + (*i)->color.r * otherArea, 0.0, 255.0);
+            color.g = (unsigned char)std::clamp(color.g * ownArea + (*i)->color.g * otherArea, 0.0, 255.0);
+            color.b = (unsigned char)std::clamp(color.b * ownArea + (*i)->color.b * otherArea, 0.0, 255.0);
+
+            delete *i;
+            i = objectList.erase(i);
+            continue;
+          }
+        } else {
+          // non-circular collisions: mark contact; no special resolution here
+          (*i)->lastCollision = this;
+          lastCollision = *i;
+          ++i;
+          continue;
+        }
+      }
+
+      // --- Gravity accumulation with softening (avoids spikes) ---
+      double dx = (*i)->pos.x - pos.x;
+      double dy = (*i)->pos.y - pos.y;
+      const double soft2 = 1e-4;                 // tune in engine units^2
+      double r2 = dx*dx + dy*dy + soft2;
+      double invR = 1.0 / std::sqrt(r2);
+      double scalarF = gravitationalConstant * mass * (*i)->mass / r2;
+      F += vector(dx * invR, dy * invR) * scalarF;
+
+      ++i;
+    } // objects loop
+
+    // friction as exponential decay for stability
+    speed *= (float)std::exp(-frictionFactor * dt);
+    if (gravityAffected) speed.y += (float)(freeFallAcceleration * dt);
+    if (mass > 0.0) {
+      Vector2 a = F / mass;
+      speed += a * (float)dt;
+    }
+    pos += speed * (float)dt;
+
+    // hygiene
+    if (!std::isfinite(speed.x)) speed.x = 0;
+    if (!std::isfinite(speed.y)) speed.y = 0;
+    if (!std::isfinite(pos.x))   pos.x   = 0;
+    if (!std::isfinite(pos.y))   pos.y   = 0;
+    const double VMAX = 1e7;
+    double vlen = distance(speed);
+    if (vlen > VMAX) speed *= (float)(VMAX / vlen);
+  }
 }
 
 class PhysicsCircularObject : public CircularObject {

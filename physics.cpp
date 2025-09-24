@@ -119,13 +119,7 @@ int main(){
       SetWindowSize(screenWidth,screenHeight);
       StarsInit();
     }
-    double keyscale = 1;
-    if(IsKeyDown(KEY_LEFT_ALT))keyscale*=10000;
-    if(IsKeyDown(KEY_LEFT_SHIFT))keyscale*=10;
-    if(IsKeyDown(KEY_LEFT_CONTROL))keyscale*=100;
-    if(IsKeyDown(KEY_RIGHT_CONTROL))keyscale*=0.01;
-    if(IsKeyDown(KEY_LEFT_SHIFT))keyscale*=0.1;
-    if(IsKeyDown(KEY_LEFT_ALT))keyscale*=0.0001;
+    double keyscale = getKeyScale();
     
     if(IsMouseButtonPressed(MOUSE_BUTTON_LEFT)&&!PhysEditor::S().visible){
       PhysEditor::HandleLeftClickCreate(GetMousePosition());
