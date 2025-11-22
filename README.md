@@ -15,6 +15,9 @@
 
 - Left click: create an object
 - Right click: open object property editor; if clicked background: edit new object template
+
+- I: save scene to file (on desktop: scene.csv)
+- O: load scene from file (on desktop: scene.csv)
 ### Controls (ru)
 - Колесико мыши: приблизить  
 - WASD: переместить камеру
@@ -29,3 +32,6 @@
 
 - ЛКМ: создать объект
 - ПКМ: открыть редактор объекта, если нажат задний фон: редактировать макет новых объектов
+
+- I: сохранить сцену в файл (on desktop: scene.csv)
+- O: загрузить сцену из файла (on desktop: scene.csv)

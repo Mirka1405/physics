@@ -3,6 +3,15 @@
 #include "physics_ui.hpp"
 #include "physics_functions.hpp"
 #include "physics_editor.hpp"
+#include "physics_localisation.hpp"
+
+#include <string>
+#include <fstream>
+#include <sstream>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 
 extern int scrollSpeed;
 extern float timeScale;
@@ -15,99 +24,230 @@ extern Vector2 windowPos;
 extern double windowScale;
 extern double windowVisualScale;
 extern bool visualScaling;
+extern bool editingTrailLifetime;
+extern double trailLifetime;
 extern double mouseWheelScaleFactor;
-/*std::ostream& operator<<(std::ostream& out,const Vector2& v){
-  out<<"("<<v.x<<", "<<v.y<<")";
-  return out;
-}*/
+
 extern std::list<Object*> objectList;
 auto lastVisitedObject = objectList.begin();
 extern std::list<UI*> UIList;
+
+// ---------------- Web helpers (WASM) ----------------
+#ifdef __EMSCRIPTEN__
+
+EM_JS(void, Web_OpenFileDialog, (), {
+    if (!Module.rayFileInput) {
+        Module.rayFileInput = document.createElement('input');
+        Module.rayFileInput.type = 'file';
+        Module.rayFileInput.style.display = 'none';
+        document.body.appendChild(Module.rayFileInput);
+    }
+    Module.rayFileInput.value = "";
+
+    Module.rayFileInput.onchange = function(e) {
+        var file = e.target.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function(ev) {
+            var data = new Uint8Array(ev.target.result);
+            var FS_ = (typeof FS !== 'undefined') ? FS : (Module.FS || null);
+            if (!FS_) {
+                console.error("FS not available");
+                return;
+            }
+            try {
+                if (FS_.analyzePath('/opened.csv').exists) {
+                    FS_.unlink('/opened.csv');
+                }
+            } catch(e) {}
+            FS_.writeFile('/opened.csv', data);
+            Module.rayFileReady = 1;
+        };
+        reader.readAsArrayBuffer(file);
+    };
+
+    if (typeof Module.rayFileReady === 'undefined') Module.rayFileReady = 0;
+    Module.rayFileInput.click();
+});
+
+EM_JS(int, Web_IsFileReady, (), {
+    return (Module.rayFileReady|0);
+});
+
+EM_JS(void, Web_ConsumeFileReady, (), {
+    Module.rayFileReady = 0;
+});
+
+EM_JS(void, Web_DownloadFile, (const char* path), {
+    var p = UTF8ToString(path);
+    try {
+        var data = FS.readFile(p); // Uint8Array
+        var blob = new Blob([data], {type: 'text/csv'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = p.split('/').pop();
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch(e) {
+        console.error('Download failed', e);
+    }
+});
+
+#else
+
+static void Web_OpenFileDialog() {}
+static int  Web_IsFileReady() { return 0; }
+static void Web_ConsumeFileReady() {}
+static void Web_DownloadFile(const char*) {}
+
+#endif // __EMSCRIPTEN__
+
+// ---------------- CSV scene save/load ----------------
+void ClearScene() {
+    for (auto* o : objectList) delete o;
+    objectList.clear();
+}
+
+void SaveSceneCSV(const char* path) {
+    std::ofstream ofs(path);
+    if (!ofs) return;
+
+    // Header:
+    ofs << "Width,Height,Pos_X,Pos_Y,Speed_X,Speed_Y,Mass,Friction,Elasticity,"
+           "GravityAffected,LeaveTrail,Fixed,Color_R,Color_G,Color_B\n";
+
+    for (auto* o : objectList) {
+        if (dynamic_cast<TrailParticle*>(o)) {continue;}
+        if (dynamic_cast<Particle*>(o)) {continue;}
+        double width = 0.0;
+        double height = 0.0;
+
+        if (auto* c = dynamic_cast<CircularObject*>(o)) {
+            width  = 0.0;                 // circle flag
+            height = c->radius * 2.0;     // radius = Height/2
+        } else if (auto* r = dynamic_cast<RectangularObject*>(o)) {
+            width  = r->sides.x;
+            height = r->sides.y;
+        } else {
+            continue; // unknown type – skip
+        }
+
+        ofs << width << ','
+            << height << ','
+            << o->pos.x << ','
+            << o->pos.y << ','
+            << o->speed.x << ','
+            << o->speed.y << ','
+            << o->mass << ','
+            << o->frictionFactor << ','
+            << o->elasticity << ','
+            << (o->gravityAffected ? 1 : 0) << ','
+            << (o->leaveTrail ? 1 : 0) << ','
+            << (o->fixed ? 1 : 0) << ','
+            << (int)o->color.r << ','
+            << (int)o->color.g << ','
+            << (int)o->color.b << '\n';
+    }
+}
+
+void LoadSceneCSV(const char* path) {
+    std::ifstream ifs(path);
+    if (!ifs) return;
+
+    ClearScene();
+
+    std::string line;
+    if (!std::getline(ifs, line)) return; // skip header
+
+    while (std::getline(ifs, line)) {
+        if (line.empty()) continue;
+        std::stringstream ss(line);
+        std::string cell;
+
+        auto readDouble = [&]() -> double {
+            if (!std::getline(ss, cell, ',')) return 0.0;
+            if (cell.empty()) return 0.0;
+            return std::stod(cell);
+        };
+        auto readInt = [&]() -> int {
+            if (!std::getline(ss, cell, ',')) return 0;
+            if (cell.empty()) return 0;
+            return std::stoi(cell);
+        };
+
+        double width   = readDouble();
+        double height  = readDouble();
+        double posx    = readDouble();
+        double posy    = readDouble();
+        double speedx  = readDouble();
+        double speedy  = readDouble();
+        double mass    = readDouble();
+        double friction= readDouble();
+        double elast   = readDouble();
+        int grav       = readInt();
+        int trail      = readInt();
+        int fixedFlag  = readInt();
+        int cr         = readInt();
+        int cg         = readInt();
+        int cb         = readInt();
+
+        Color color = {(unsigned char)cr, (unsigned char)cg, (unsigned char)cb, 255};
+        Vector2 pos = vector(posx, posy);
+        Vector2 vel = vector(speedx, speedy);
+
+        Object* o = nullptr;
+
+        if (width == 0.0) {
+            double radius = height * 0.5;
+            o = new PhysicsCircularObject(pos, vel, color, mass, radius, friction, trail != 0);
+        } else {
+            Vector2 sides = vector(width, height);
+            o = new PhysicsRectangularObject(pos, vel, color, mass, sides, friction);
+            o->leaveTrail = (trail != 0);
+        }
+
+        o->elasticity      = (float)elast;
+        o->gravityAffected = (grav != 0);
+        o->fixed           = (fixedFlag != 0);
+
+        objectList.push_back(o);
+    }
+
+    lastVisitedObject = objectList.begin();
+}
+
+void OnFileLoaded(const char* path) {
+    LoadSceneCSV(path);
+}
+
+// ---------------- UI & main ----------------
+
 void debugPreInit(){
-  // ---- PHYSICAL CONSTANTS (SI) ----
-  const double G_SI    = 6.67430e-11;         // m^3 / (kg s^2)
-  const double AU_m    = 1.495978707e11;      // meters
-  const double R_SUN_m = 6.9634e8;            // meters
-  const double M_SUN   = 1.98847e30;          // kg
-
-  // ---- ENGINE UNIT SCALING ----
-  // We want Sun radius = 100 engine units -> 1 engine unit = R_SUN_m / 100
-  const double UNIT_m = R_SUN_m / 100.0;      // meters per engine unit
-  // Rescale G for engine units (distance in "UNIT_m", time in seconds):
-  // a' [unit/s^2] = (G_SI / UNIT_m^3) * M / r'^2
-  gravitationalConstant = G_SI / (UNIT_m*UNIT_m*UNIT_m);
-
-  // (optional) keep local gravity for "gravityAffected" objects negligible here
-  freeFallAcceleration = 0.0;
-
-  // Helper to add a body
-  auto addBody = [](Vector2 p, Vector2 v, Color c, double mass, double radius, float elasticity = 1.0f){
-    auto* obj = new PhysicsCircularObject(p, v, c, mass, radius, /*frictionFactor=*/0.0);
-    obj->elasticity = elasticity;
-    objectList.push_back(obj);
-    return obj;
-  };
-
-  // Compute circular orbital speed in engine units: v' = sqrt(G' * M_central / r')
-  auto circSpeed = [](double Gp, double Mcentral, double r_units){
-    return std::sqrt(Gp * Mcentral / r_units);
-  };
-
-  // ---- SUN ----
-  const double R_SUN_units = 100.0;           // by requirement
-  auto* sun = addBody(vector(0,0), vector(0,0), {253, 184, 19, 255}, M_SUN, R_SUN_units); // yellowish
-
-  // ---- PLANET DATA (approx mean values) ----
-  struct PlanetDef {
-    const char* name;
-    double a_AU;     // semi-major axis in AU (we'll do circular approx at 'a')
-    double radius_m; // mean radius in meters
-    double mass_kg;  // mass in kg
-    Color color;
-  };
-
-  PlanetDef planets[] = {
-    {"Mercury", 0.387,  2.4397e6,   3.3011e23, {169,169,169,255}}, // gray
-    {"Venus",   0.723,  6.0518e6,   4.8675e24, {218,165, 32,255}}, // golden
-    {"Earth",   1.000,  6.3710e6,   5.97237e24,{ 70,130,180,255}}, // steel blue
-    {"Mars",    1.524,  3.3895e6,   6.4171e23, {205, 92,  92,255}},// indian red
-    {"Jupiter", 5.203,  6.9911e7,   1.8982e27, {222,184,135,255}}, // burlywood
-    {"Saturn",  9.537,  5.8232e7,   5.6834e26, {210,180,140,255}}, // tan
-    {"Uranus", 19.191,  2.5362e7,   8.6810e25, {175,238,238,255}}, // pale turquoise
-    {"Neptune",30.070,  2.4622e7,   1.02413e26,{ 65,105,225,255}}, // royal blue
-  };
-
-  // Place planets on +X axis; give +Y velocity for counterclockwise orbits.
-  for (const auto& P : planets) {
-    const double r_units   = (P.a_AU * AU_m) / UNIT_m;      // distance in engine units
-    const double R_units   =  P.radius_m / UNIT_m;          // radius in engine units (to scale!)
-    const double v_units   = circSpeed(gravitationalConstant, M_SUN, r_units);
-
-    // Position and velocity (perpendicular)
-    Vector2 pos = vector((float)r_units, 0.0f);
-    Vector2 vel = vector(0.0f, (float)v_units);
-
-    auto* body = addBody(pos, vel, P.color, P.mass_kg, R_units, /*elasticity=*/1.0f);
-    (void)body;
-  }
-  windowPos = sun->pos - vector(screenWidth, screenHeight)*windowScale/2.0;
 }
 
 void UIPreInit(){
   UIList.push_back(new WindowScaleUI());
   UIList.push_back(new TimeScaleUI(0,24));
   UIList.push_back(new PauseUI(6,-32));
-  UIList.push_back(new OwnershipUI("Miron Samokhvalov",-150,0));
+  UIList.push_back(new OwnershipUI(L("creator.myname"),-260,0));
   UIList.push_back(new VisualScaleUI(0,48));
+  UIList.push_back(new TrailLifetimeUI(0,48));
 }
 
-int main(){
+int main(int argc, char** argv){
+  lang = (argc > 1) ? argv[1] : lang;
+  
   //debugPreInit();
   UIPreInit();
   StarsInit();
   
   SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
-  InitWindow(screenWidth, screenHeight, "physics!");
+  InitWindow(screenWidth, screenHeight, "Physics 10A");
+  LoadUIFont();
+  SetTextureFilter(uiFont.texture, TEXTURE_FILTER_BILINEAR);
   SetTargetFPS(60);
   
   PhysEditor::Init();
@@ -121,8 +261,10 @@ int main(){
     }
     double keyscale = getKeyScale();
     
-    if(IsMouseButtonPressed(MOUSE_BUTTON_LEFT)&&!PhysEditor::S().visible){
-      PhysEditor::HandleLeftClickCreate(GetMousePosition());
+    if(IsMouseButtonPressed(MOUSE_BUTTON_LEFT)){
+      if(!PhysEditor::S().visible)
+        PhysEditor::HandleLeftClickCreate(GetMousePosition());
+      else PhysEditor::TryPickOrbitTarget(GetMousePosition());
     }
     if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)){
       PhysEditor::OnRightClick(GetMousePosition());
@@ -133,6 +275,35 @@ int main(){
     if(IsKeyPressed(KEY_TAB)){
       paused=!paused;
     }
+
+    // --- CSV load/save ---
+    if(IsKeyPressed(KEY_O)){
+#ifdef __EMSCRIPTEN__
+      // Web: open file picker, selected CSV goes to /opened.csv
+      Web_OpenFileDialog();
+#else
+      // Desktop: load scene from scene.csv in working directory
+      OnFileLoaded("scene.csv");
+#endif
+    }
+
+#ifdef __EMSCRIPTEN__
+    // Poll for CSV selected in browser
+    if (Web_IsFileReady()) {
+        Web_ConsumeFileReady();
+        OnFileLoaded("/opened.csv");
+    }
+#endif
+
+    // I = save scene to CSV
+    if(IsKeyPressed(KEY_I)){
+      const char* path = "scene.csv";
+      SaveSceneCSV(path);
+#ifdef __EMSCRIPTEN__
+      Web_DownloadFile(path);
+#endif
+    }
+
     if(IsKeyPressed(KEY_PERIOD)){
       if(objectList.size()>0){
         if(lastVisitedObject==objectList.end()) lastVisitedObject=objectList.begin();
@@ -157,13 +328,22 @@ int main(){
     }
     if(IsKeyPressed(KEY_EQUAL)){
       if(visualScaling) windowVisualScale+=0.1*keyscale;
+      else if(editingTrailLifetime) trailLifetime+=keyscale;
       else timeScale+=0.1*keyscale;
     }
     if(IsKeyPressed(KEY_MINUS)){
       if(visualScaling) windowVisualScale-=0.1*keyscale;
+      else if(editingTrailLifetime) trailLifetime-=keyscale;
       else timeScale-=0.1*keyscale;
     }
-    if(IsKeyPressed(KEY_C))visualScaling=!visualScaling;
+    if(IsKeyPressed(KEY_C)){
+      visualScaling=!visualScaling;
+      if(visualScaling)editingTrailLifetime=false;
+    }
+    if(IsKeyPressed(KEY_T)){
+      editingTrailLifetime=!editingTrailLifetime;
+      if(editingTrailLifetime)visualScaling=false;
+    }
     auto mw_mv = -GetMouseWheelMove()*mouseWheelScaleFactor*keyscale;
     
     windowScale+=mw_mv;
@@ -198,4 +378,5 @@ int main(){
   CloseWindow();
   for (auto obj : objectList) delete obj;
   for (auto UI : UIList) delete UI;
+  UnloadFont(uiFont);
 }

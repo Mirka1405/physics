@@ -16,21 +16,30 @@ class Object{
   unsigned long long uuid;
   bool shouldRemove = false;
   bool gravityAffected = false;
+  bool fixed = false;
+  bool leaveTrail = false;
+  Vector2 lastTrailPos;
   double timeAlive = 0;
   Object* lastCollision = nullptr;
   float elasticity = 0.5; // range: [0;1] || if any at 0, objects are combined at collision; in other cases momentum is transferred back
-  Object(Vector2 pos, Vector2 init_speed, Color color, double mass, double frictionFactor){
+  Object(Vector2 pos, Vector2 init_speed, Color color, double mass, double frictionFactor, bool leaveTrail = false){
     this->pos = pos;
     this->speed = init_speed;
     this->frictionFactor = frictionFactor;
     this->color = color;
     this->mass = mass;
     this->uuid = getUUID();
+    this->leaveTrail = leaveTrail;
+    this->lastTrailPos = vector(pos.x,pos.y);
   }
   virtual void defaultRender(Color col) = 0;
-  virtual void tick(){
+  void tickTime(){
     auto ft = GetFrameTime()*timeScale;
     timeAlive+=ft;
+  }
+  virtual void tick(){
+    tickTime();
+    auto ft = GetFrameTime()*timeScale;
     this->pos+=this->speed*ft;
     this->speed*=1-frictionFactor*ft;
     if(this->gravityAffected)this->speed.y+=freeFallAcceleration*ft;
@@ -40,6 +49,7 @@ class Object{
   };
   void tickWithAttractionForce();
   bool tickLifeTime(double maxLifeTimeSeconds){ // returns true if this is the tick when the Object starts being marked as deleted
+    tickTime();
     if(shouldRemove)return false;
     if(maxLifeTimeSeconds<=timeAlive)shouldRemove=true;
     return shouldRemove;
@@ -49,11 +59,12 @@ class Object{
   virtual void setArea(double a) = 0;
 };
 Object::~Object() {}
+std::list<Object*> objectList;
 class CircularObject : public Object{
   public:
   virtual ~CircularObject() = default;
   double radius;
-  CircularObject(Vector2 pos, Vector2 init_speed, Color color, double mass, double radius=1, double frictionFactor=0.02): Object(pos,init_speed,color,mass,frictionFactor){
+  CircularObject(Vector2 pos, Vector2 init_speed, Color color, double mass, double radius=1, double frictionFactor=0.02, bool leaveTrail = false): Object(pos,init_speed,color,mass,frictionFactor, leaveTrail){
     this->radius = radius;
   }
   void defaultRender (Color col){
@@ -73,6 +84,7 @@ class CircularObject : public Object{
     if(!desperate) return o->checkCollision(this,true);
     return false;
   }
+  void trail();
 };
 class Particle : public CircularObject{
   public:
@@ -93,10 +105,28 @@ class Particle : public CircularObject{
   void tick() override{
     CircularObject::tick();
     CircularObject::tickLifeTime(fadeSeconds);
-  };
+  }
+};
+class TrailParticle : public CircularObject {
+  public:
+  ~TrailParticle() = default;
+  TrailParticle(Vector2 pos, Vector2 init_speed, Color color, double radius=1,double frictionFactor=0.02) : CircularObject(pos,init_speed,color,0,radius,frictionFactor){
+  }
+  Color calculateColor(){
+    Color n(this->color);
+    n.a = 255-(char)(255*(timeAlive/trailLifetime));
+    return n;
+  }
+  void draw() override{
+    if(shouldRemove)return;
+    defaultRender(this->calculateColor());
+  }
+  void tick() override{
+    tickTime();
+    if(timeAlive>trailLifetime) shouldRemove=true;
+  }
 };
 
-std::list<Object*> objectList;
 void explosion(Vector2 pos,Color color,double maxSize,double speed=1,int maxParticles=30,int minParticles=0){
   for(int _=0;_<minParticles+randFloat()*(maxParticles-minParticles);_++){
     objectList.push_back(new Particle(pos,vector(randNegFloat(),randNegFloat())*speed,color,maxSize*randFloat()));
@@ -107,101 +137,15 @@ void explosion(Vector2 pos,Color color,double maxSize,Vector2 speed,int maxParti
     objectList.push_back(new Particle(pos,vector(randNegFloat(),randNegFloat())*speed,color,maxSize*randFloat()));
   }
 }
-/*
-void Object::tickWithAttractionForce(){ // if called, you don't need to call Object::tick().
-  if(lastCollision&&!checkCollision(lastCollision)){lastCollision=nullptr;}
-  // F = mg
-  // F = frictionFactor * mg
-  // F = ma
-  // F = G * m1 * m2 / dist / dist
-  Vector2 F = vector(0,0);
-  for(auto i=objectList.begin();i!=objectList.end();){
-    if((*i)->mass==0||uuid==(*i)->uuid){i++;continue;}
-    if(checkCollision((*i))){
-      auto ownArea = area();
-      auto otherArea = (*i)->area();
-      if (elasticity != 0 && (*i)->elasticity != 0) {
-        if(distance(speed)<1 && distance((*i)->speed)<1){i++;continue;}
-        auto avgElasticity = (elasticity+(*i)->elasticity)/2;
-        Vector2 collision_dir = (*i)->pos-pos;
-        Vector2 collision_normal = Vector2Normalize(collision_dir);
-        if (auto selfC = dynamic_cast<CircularObject*>(this)) {
-            if (auto otherC = dynamic_cast<CircularObject*>(*i)) {
-                double dx = otherC->pos.x - selfC->pos.x;
-                double dy = otherC->pos.y - selfC->pos.y;
-                double d  = std::sqrt(dx*dx + dy*dy);
-                double target = selfC->radius + otherC->radius;
-                double pen = target - d;
-                if (pen > 0.0 && d > 0.0) {
-                    // Baumgarte-style positional correction with slop to reduce jitter
-                    const double slop = 0.1;     // allowed tiny penetration (engine units)
-                    const double percent = 0.8;  // resolve 80% per frame
-                    double corr = std::max(0.0, pen - slop) * percent;
 
-                    Vector2 n = { (float)(dx / d), (float)(dy / d) };
-                    double im1 = (mass > 0.0)      ? 1.0 / mass        : 0.0;
-                    double im2 = ((*i)->mass > 0.) ? 1.0 / (*i)->mass  : 0.0;
-                    double sum = im1 + im2; if (sum == 0.0) sum = 1.0;
-
-                    selfC->pos  -= n * (float)(corr * (im1 / sum));
-                    otherC->pos += n * (float)(corr * (im2 / sum));
-                }
-            }
-        }
-        float v1 = Vector2DotProduct(speed, collision_normal);
-        float v2 = Vector2DotProduct((*i)->speed, collision_normal);
-        
-        if (v1 - v2 <= 0) {
-          i++;
-          continue;
-        }
-
-        float new_v1 = ((mass - (*i)->mass) * v1 + 2 * (*i)->mass * v2) / (mass + (*i)->mass);
-        float new_v2 = (2 * mass * v1 + ((*i)->mass - mass) * v2) / (mass + (*i)->mass);
-        
-        new_v1 *= avgElasticity;
-        new_v2 *= avgElasticity;
-
-        speed = speed-collision_normal*v1+collision_normal*new_v1;
-        (*i)->speed = (*i)->speed-collision_normal*v2+collision_normal*new_v2;
-
-        if(distance(speed)+distance((*i)->speed)>20)explosion((*i)->pos, color, sqrt(otherArea)*0.2, distance((*i)->speed)*1.5, (int)(sqrt(distance(speed)+distance((*i)->speed))));
-        (*i)->lastCollision = this;
-        lastCollision = *i;
-        i++;
-        continue;
-      }
-      if(otherArea>ownArea){
-        auto oldPos = pos;
-        pos=(*i)->pos;
-        (*i)->pos=oldPos; // for correct particle spawning
-      }
-      explosion((*i)->pos,(*i)->color,sqrt(otherArea)*0.5,distance((*i)->speed)*0.5);
-      setArea(ownArea+otherArea);
-      auto areaSum = ownArea+otherArea;
-      ownArea/=areaSum; // 0 to 1
-      otherArea/=areaSum; // 0 to 1
-      //v = (m1*v1 + m2*v2)/m
-      auto sumMass = mass+(*i)->mass;
-      speed = (speed*mass+(*i)->speed*(*i)->mass)/sumMass;
-      mass=sumMass;
-      color.r = static_cast<unsigned char>(std::clamp(color.r*ownArea + (*i)->color.r*otherArea,0.0,255.0)); // weighted avg
-      color.g = static_cast<unsigned char>(std::clamp(color.g*ownArea + (*i)->color.g*otherArea,0.0,255.0)); 
-      color.b = static_cast<unsigned char>(std::clamp(color.b*ownArea + (*i)->color.b*otherArea,0.0,255.0));
-      delete *i;
-      i=objectList.erase(i);
-      continue;
-    }
-    double d = distance(this->pos,(*i)->pos);
-    double scalarF = gravitationalConstant*this->mass*(*i)->mass/d/d;
-    F+=vector((*i)->pos.x-this->pos.x,(*i)->pos.y-this->pos.y)/d*scalarF;
-    i++;
+void CircularObject::trail(){
+  if (distance(pos,lastTrailPos)>2*radius){
+    objectList.push_back(new TrailParticle(lastTrailPos,vector(),color,radius*0.1));
+    lastTrailPos.x=pos.x;lastTrailPos.y=pos.y;
   }
-  Object::tick();
-  this->speed+=F/this->mass*GetFrameTime()*timeScale;
 }
-*/
-void Object::tickWithAttractionForce() { // replaces your current implementation
+
+void Object::tickWithAttractionForce() {
   if (lastCollision && !checkCollision(lastCollision)) lastCollision = nullptr;
 
   // time stepping (substep to avoid tunneling/creep)
@@ -217,12 +161,10 @@ void Object::tickWithAttractionForce() { // replaces your current implementation
     for (auto i = objectList.begin(); i != objectList.end(); ) {
       if ((*i)->mass == 0 || uuid == (*i)->uuid) { ++i; continue; }
 
-      // --- Collision handling (circles) ---
       if (checkCollision(*i)) {
         auto selfC  = dynamic_cast<CircularObject*>(this);
         auto otherC = dynamic_cast<CircularObject*>(*i);
 
-        // Always do positional correction if overlapping (prevents slow sinking)
         if (selfC && otherC) {
           double dx = otherC->pos.x - selfC->pos.x;
           double dy = otherC->pos.y - selfC->pos.y;
@@ -237,8 +179,13 @@ void Object::tickWithAttractionForce() { // replaces your current implementation
             Vector2 n = { (float)(dx / d), (float)(dy / d) };
             double im1 = (mass > 0.0)       ? 1.0 / mass       : 0.0;
             double im2 = ((*i)->mass > 0.0) ? 1.0 / (*i)->mass : 0.0;
-            double sum = im1 + im2; if (sum == 0.0) sum = 1.0;
 
+            // Fixed objects don't move under position correction
+            if (fixed)         im1 = 0.0;
+            if ((*i)->fixed)   im2 = 0.0;
+
+            double sum = im1 + im2; 
+            if (sum == 0.0) sum = 1.0;
             selfC->pos  -= n * (float)(corr * (im1 / sum));
             otherC->pos += n * (float)(corr * (im2 / sum));
           }
@@ -252,18 +199,45 @@ void Object::tickWithAttractionForce() { // replaces your current implementation
 
             if (approaching) {
               float avgE = std::clamp((elasticity + (*i)->elasticity) * 0.5f, 0.0f, 1.0f);
-              float new_v1 = ((float)(mass - (*i)->mass) * v1 + 2.0f * (float)(*i)->mass * v2) / (float)(mass + (*i)->mass);
-              float new_v2 = (2.0f * (float)mass * v1 + (float)((*i)->mass - mass) * v2) / (float)(mass + (*i)->mass);
-              new_v1 *= avgE; new_v2 *= avgE;
+              float new_v1 = v1;
+              float new_v2 = v2;
 
-              speed       = speed        - n * v1 + n * new_v1;
-              (*i)->speed = (*i)->speed  - n * v2 + n * new_v2;
+              // handle fixed bodies (you likely already have this part from the previous fix)
+              if (fixed && !(*i)->fixed) {
+                  new_v1 = 0.0f;
+                  new_v2 = -v2 * avgE;
+              } else if (!fixed && (*i)->fixed) {
+                  new_v1 = -v1 * avgE;
+                  new_v2 = 0.0f;
+              } else {
+                  new_v1 = ((float)(mass - (*i)->mass) * v1 + 2.0f * (float)(*i)->mass * v2) / (float)(mass + (*i)->mass);
+                  new_v2 = (2.0f * (float)mass * v1 + (float)((*i)->mass - mass) * v2) / (float)(mass + (*i)->mass);
+                  new_v1 *= avgE;
+                  new_v2 *= avgE;
+              }
 
-              // optional fx
-              if (distance(speed) + distance((*i)->speed) > 20) {
-                auto otherArea = otherC->area();
-                explosion((*i)->pos, color, std::sqrt(otherArea) * 0.2, distance((*i)->speed) * 1.5,
-                          (int)std::sqrt(distance(speed) + distance((*i)->speed)));
+              if (!fixed)
+                  speed = speed - n * v1 + n * new_v1;
+              if (!(*i)->fixed)
+                  (*i)->speed = (*i)->speed - n * v2 + n * new_v2;
+
+              if (lastCollision != *i && distance(speed) + distance((*i)->speed) > 20) {
+                  // approximate contact point between spheres
+                  Vector2 hitPos;
+                  double totalR = selfC->radius + otherC->radius;
+                  if (totalR > 0.0) {
+                      float t = (float)(selfC->radius / totalR);
+                      hitPos = selfC->pos * t + otherC->pos * (1.0f - t);
+                  } else {
+                      hitPos = (selfC->pos + otherC->pos) * 0.5f;
+                  }
+
+                  auto otherArea = otherC->area();
+                  explosion(hitPos,
+                            color,
+                            std::sqrt(otherArea) * 0.2,
+                            distance((*i)->speed) * 1.5,
+                            (int)std::sqrt(distance(speed) + distance((*i)->speed)));
               }
             }
 
@@ -323,13 +297,15 @@ void Object::tickWithAttractionForce() { // replaces your current implementation
     } // objects loop
 
     // friction as exponential decay for stability
-    speed *= (float)std::exp(-frictionFactor * dt);
-    if (gravityAffected) speed.y += (float)(freeFallAcceleration * dt);
-    if (mass > 0.0) {
-      Vector2 a = F / mass;
-      speed += a * (float)dt;
+    if (!fixed) {
+      speed *= (float)std::exp(-frictionFactor * dt);
+      if (gravityAffected) speed.y += (float)(freeFallAcceleration * dt);
+      if (mass > 0.0) {
+        Vector2 a = F / mass;
+        speed += a * (float)dt;
+      }
+      pos += speed * (float)dt;
     }
-    pos += speed * (float)dt;
 
     // hygiene
     if (!std::isfinite(speed.x)) speed.x = 0;
@@ -344,10 +320,12 @@ void Object::tickWithAttractionForce() { // replaces your current implementation
 
 class PhysicsCircularObject : public CircularObject {
   public:
-  PhysicsCircularObject(Vector2 pos, Vector2 init_speed, Color color, double mass, double radius = 1, double frictionFactor = 0.02)
-    : CircularObject(pos, init_speed, color, mass, radius, frictionFactor) {}
+  PhysicsCircularObject(Vector2 pos, Vector2 init_speed, Color color, double mass, double radius = 1, double frictionFactor = 0.02, bool leaveTrail = false)
+    : CircularObject(pos, init_speed, color, mass, radius, frictionFactor, leaveTrail) {}
   void tick() override{
     tickWithAttractionForce();
+    if(leaveTrail)trail();
+    tickTime();
   }
 };
 

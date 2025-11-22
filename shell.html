@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>raylib wasm</title>
+  <title>Physics</title>
   <style>
     html, body {
       margin: 0;
@@ -37,10 +37,11 @@
 <body>
   <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
   <div id="status">loading…</div>
-
   <script>
     // Emscripten module stub. The linker will inject more stuff here.
+    const arg = new URL(window.location).searchParams.get("lang");
     var Module = {
+      arguments: [],
       preRun: [],
       postRun: [],
       print: (function() {
@@ -67,6 +68,7 @@
         fitCanvas(); // ensure correct size right away
       }
     };
+    if(arg)Module.arguments = [arg];
 
     function fitCanvas() {
       const canvas = Module.canvas || document.getElementById('canvas');
