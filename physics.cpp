@@ -305,13 +305,15 @@ int main(int argc, char** argv){
     }
 
     if(IsKeyPressed(KEY_PERIOD)){
+      int visited_obj = 0;
       if(objectList.size()>0){
         if(lastVisitedObject==objectList.end()) lastVisitedObject=objectList.begin();
         windowPos=(*lastVisitedObject)->pos-vector(screenWidth,screenHeight)*windowScale/2;
         do{
           lastVisitedObject++;
+          visited_obj++;
           if(lastVisitedObject==objectList.end()) lastVisitedObject=objectList.begin();
-        }while((*lastVisitedObject)->mass==0);
+        }while((*lastVisitedObject)->mass==0 && visited_obj<objectList.size());
       }
     }
     if(IsKeyDown(KEY_W)){
