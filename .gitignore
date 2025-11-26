@@ -4,3 +4,4 @@ physics.js
 physics.exe
 scene.csv
 .vscode
+*.data
