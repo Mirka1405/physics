@@ -184,7 +184,7 @@ static void DrawPanelFrame(State& st){
 
     Rectangle title = {panel.x, panel.y, panel.width, 28};
     DrawRectangleRec(title, (Color){30,30,42,255});
-    const std::string titleTxt = st.editingTemplate ? L("editor.title.template") : L("editor.title.template");
+    const std::string titleTxt = st.editingTemplate ? L("editor.title.template") : L("editor.title.object");
     DrawTextEx(uiFont, titleTxt.c_str(), vector(panel.x+10, panel.y+6), 16, 1.0f, WHITE);
 
     // Dragging

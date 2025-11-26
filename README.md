@@ -5,7 +5,7 @@
 - Scrollwheel: zoom
 - WASD: move camera
 - -/+: adjust time scale; in visual scale mode adjust visual scale
-- (these commands can be scaled: Shift=10x, Ctrl=100x, Alt=10000x; Right-shift=0.1x, Right-ctrl=0.01x, Right-alt=0.0001x; if right keys not supported use Z for inverting)
+- (these commands can be scaled: Shift=10x, Ctrl=100x, Alt=10000x; X=1e8x; Right-shift=0.1x, Right-ctrl=0.01x, Right-alt=0.0001x; if right keys not supported use Z for inverting)
 
 - Space: move camera to (0,0)
 - Dot (.): move camera to next object
@@ -22,7 +22,7 @@
 - Колесико мыши: приблизить  
 - WASD: переместить камеру
 - -/+: ускорить/замедлить время
-- (предыдущие команды можно ускорить: Shift=10x, Ctrl=100x, Alt=10000x; Right-shift=0.1x, Right-ctrl=0.01x, Right-alt=0.0001x; если нет поддержки правых клавиш, обратное число с помощью клавиши Z)
+- (предыдущие команды можно ускорить: Shift=10x, Ctrl=100x, Alt=10000x; X=1e8x; Right-shift=0.1x, Right-ctrl=0.01x, Right-alt=0.0001x; если нет поддержки правых клавиш, обратное число с помощью клавиши Z)
 
 - Пробел: переместить камеру обратно к (0,0)
 - Точка (ю): переместиться к следующему объекту
@@ -33,5 +33,5 @@
 - ЛКМ: создать объект
 - ПКМ: открыть редактор объекта, если нажат задний фон: редактировать макет новых объектов
 
-- I: сохранить сцену в файл (on desktop: scene.csv)
-- O: загрузить сцену из файла (on desktop: scene.csv)
+- I: сохранить сцену в файл (на десктопной версии: scene.csv)
+- O: загрузить сцену из файла (на десктопной версии: scene.csv)
